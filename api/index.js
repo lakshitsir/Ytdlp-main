@@ -3,125 +3,22 @@ import YtDlpWrap from "yt-dlp-wrap";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import https from "https";
 
 const app = express();
+const ytDlp = new YtDlpWrap();
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const BIN_PATH = path.join(__dirname, "yt-dlp");
-
-async function ensureYtDlp() {
-  if (fs.existsSync(BIN_PATH)) return;
-
-  const url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
-
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(BIN_PATH, { mode: 0o755 });
-    https.get(url, res => {
-      res.pipe(file);
-      file.on("finish", () => {
-        file.close(resolve);
-      });
-    }).on("error", err => reject(err));
-  });
-}
-
-const ytDlp = new YtDlpWrap(BIN_PATH);
 
 const TMP_DIR = path.join(__dirname, "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
 
-const MAX_CONCURRENT = 5;
-let activeJobs = 0;
-const jobQueue = [];
-
-const PROXIES = [null];
-const COOKIES_FILE = fs.existsSync(path.join(__dirname, "cookies.txt"))
-  ? path.join(__dirname, "cookies.txt")
-  : null;
-
-function runNextJob() {
-  if (activeJobs >= MAX_CONCURRENT || jobQueue.length === 0) return;
-  const job = jobQueue.shift();
-  activeJobs++;
-  job()
-    .catch(() => {})
-    .finally(() => {
-      activeJobs--;
-      runNextJob();
-    });
-}
-
-function enqueue(job) {
-  return new Promise((resolve, reject) => {
-    jobQueue.push(async () => {
-      try {
-        const result = await job();
-        resolve(result);
-      } catch (e) {
-        reject(e);
-      }
-    });
-    runNextJob();
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Lakshit PVT API Running",
+    dev: "@lakshitpatidar"
   });
-}
-
-function pickProxy() {
-  const usable = PROXIES.filter(p => p);
-  if (usable.length === 0) return null;
-  return usable[Math.floor(Math.random() * usable.length)];
-}
-
-async function downloadWithRetry(url, format, output) {
-  let lastError = null;
-  const fallbackFormats = [format, "bestvideo+bestaudio/best", "best"];
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    for (const fmt of fallbackFormats) {
-      try {
-        const args = [
-          url,
-          "-f", fmt,
-          "-o", output,
-          "--merge-output-format", "mp4",
-          "--no-playlist",
-          "--no-warnings",
-          "--quiet"
-        ];
-
-        const proxy = pickProxy();
-        if (proxy) args.push("--proxy", proxy);
-        if (COOKIES_FILE) args.push("--cookies", COOKIES_FILE);
-
-        await ytDlp.exec(args);
-        return true;
-      } catch (e) {
-        lastError = e;
-      }
-    }
-  }
-
-  throw lastError || new Error("All download attempts failed");
-}
-
-app.get("/", async (req, res) => {
-  try {
-    await ensureYtDlp();
-    res.json({
-      status: "ok",
-      message: "Ultra Universal yt-dlp API Running",
-      queue: jobQueue.length,
-      active: activeJobs,
-      dev: "@lakshitpatidar"
-    });
-  } catch (e) {
-    res.status(500).json({
-      status: "error",
-      message: "yt-dlp binary init failed",
-      dev: "@lakshitpatidar"
-    });
-  }
 });
 
 app.get("/api", async (req, res) => {
@@ -134,9 +31,7 @@ app.get("/api", async (req, res) => {
     });
   }
 
-  enqueue(async () => {
-    await ensureYtDlp();
-
+  try {
     let format = "bestvideo+bestaudio/best";
 
     if (url.includes("youtube.com") || url.includes("youtu.be")) {
@@ -144,31 +39,37 @@ app.get("/api", async (req, res) => {
         "bestvideo[height<=480]+bestaudio/best[height<=480]/best[height<=360]/best[height<=240]";
     }
 
-    const filename = `file_${Date.now()}_${Math.random().toString(36).slice(2)}.%(ext)s`;
+    const filename = `file_${Date.now()}.%(ext)s`;
     const output = path.join(TMP_DIR, filename);
 
-    await downloadWithRetry(url, format, output);
+    await ytDlp.exec([
+      url,
+      "-f", format,
+      "-o", output,
+      "--merge-output-format", "mp4",
+      "--no-playlist",
+      "--no-warnings",
+      "--quiet"
+    ]);
 
-    const files = fs.readdirSync(TMP_DIR)
-      .filter(f => f.startsWith("file_"))
-      .sort();
+    const files = fs.readdirSync(TMP_DIR).filter(f => f.startsWith("file_"));
+    const finalFile = files.sort().pop();
 
-    const finalFile = files.pop();
     const unifiedUrl = `${req.protocol}://${req.get("host")}/file/${finalFile}`;
 
     res.json({
       status: "success",
       url: unifiedUrl,
-      queue: jobQueue.length,
       dev: "@lakshitpatidar"
     });
-  }).catch(err => {
+
+  } catch (err) {
     res.json({
       status: "error",
       message: err.message || "Download failed",
       dev: "@lakshitpatidar"
     });
-  });
+  }
 });
 
 app.get("/file/:name", (req, res) => {
@@ -184,7 +85,7 @@ app.get("/file/:name", (req, res) => {
   stream.on("close", () => {
     setTimeout(() => {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    }, 180000);
+    }, 120000); // auto delete after 2 min
   });
 });
 
