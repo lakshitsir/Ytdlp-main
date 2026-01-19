@@ -3,12 +3,31 @@ import YtDlpWrap from "yt-dlp-wrap";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import https from "https";
 
 const app = express();
-const ytDlp = new YtDlpWrap();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const BIN_PATH = path.join(__dirname, "yt-dlp");
+
+async function ensureYtDlp() {
+  if (fs.existsSync(BIN_PATH)) return;
+
+  const url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(BIN_PATH, { mode: 0o755 });
+    https.get(url, res => {
+      res.pipe(file);
+      file.on("finish", () => {
+        file.close(resolve);
+      });
+    }).on("error", err => reject(err));
+  });
+}
+
+const ytDlp = new YtDlpWrap(BIN_PATH);
 
 const TMP_DIR = path.join(__dirname, "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
@@ -17,12 +36,7 @@ const MAX_CONCURRENT = 5;
 let activeJobs = 0;
 const jobQueue = [];
 
-const PROXIES = [
-  null,
-  "http://proxy1:port",
-  "http://proxy2:port"
-];
-
+const PROXIES = [null];
 const COOKIES_FILE = fs.existsSync(path.join(__dirname, "cookies.txt"))
   ? path.join(__dirname, "cookies.txt")
   : null;
@@ -61,12 +75,7 @@ function pickProxy() {
 
 async function downloadWithRetry(url, format, output) {
   let lastError = null;
-
-  const fallbackFormats = [
-    format,
-    "bestvideo+bestaudio/best",
-    "best"
-  ];
+  const fallbackFormats = [format, "bestvideo+bestaudio/best", "best"];
 
   for (let attempt = 0; attempt < 3; attempt++) {
     for (const fmt of fallbackFormats) {
@@ -96,14 +105,23 @@ async function downloadWithRetry(url, format, output) {
   throw lastError || new Error("All download attempts failed");
 }
 
-app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Lakshit PVT API Running",
-    queue: jobQueue.length,
-    active: activeJobs,
-    dev: "@lakshitpatidar"
-  });
+app.get("/", async (req, res) => {
+  try {
+    await ensureYtDlp();
+    res.json({
+      status: "ok",
+      message: "Ultra Universal yt-dlp API Running",
+      queue: jobQueue.length,
+      active: activeJobs,
+      dev: "@lakshitpatidar"
+    });
+  } catch (e) {
+    res.status(500).json({
+      status: "error",
+      message: "yt-dlp binary init failed",
+      dev: "@lakshitpatidar"
+    });
+  }
 });
 
 app.get("/api", async (req, res) => {
@@ -117,6 +135,8 @@ app.get("/api", async (req, res) => {
   }
 
   enqueue(async () => {
+    await ensureYtDlp();
+
     let format = "bestvideo+bestaudio/best";
 
     if (url.includes("youtube.com") || url.includes("youtu.be")) {
